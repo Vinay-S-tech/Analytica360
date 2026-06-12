@@ -1,18 +1,33 @@
 from __future__ import annotations
 
-from ..abc import AsyncResource
-from ._tasks import CancelScope
+from abc import ABCMeta, abstractmethod
+from types import TracebackType
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
-async def aclose_forcefully(resource: AsyncResource) -> None:
+class AsyncResource(metaclass=ABCMeta):
     """
-    Close an asynchronous resource in a cancelled scope.
+    Abstract base class for all closeable asynchronous resources.
 
-    Doing this closes the resource without waiting on anything.
-
-    :param resource: the resource to close
-
+    Works as an asynchronous context manager which returns the instance itself on enter,
+    and calls :meth:`aclose` on exit.
     """
-    with CancelScope() as scope:
-        scope.cancel()
-        await resource.aclose()
+
+    __slots__ = ()
+
+    async def __aenter__(self: T) -> T:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    @abstractmethod
+    async def aclose(self) -> None:
+        """Close the resource."""

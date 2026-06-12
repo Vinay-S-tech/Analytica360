@@ -1,82 +1,65 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Generator
-from typing import Any, cast
+import types
+from abc import ABCMeta, abstractmethod
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable
+from typing import Any, TypeVar
 
-from ._eventloop import get_async_backend
+_T = TypeVar("_T")
 
 
-class TaskInfo:
+class TestRunner(metaclass=ABCMeta):
     """
-    Represents an asynchronous task.
-
-    :ivar int id: the unique identifier of the task
-    :ivar parent_id: the identifier of the parent task, if any
-    :vartype parent_id: Optional[int]
-    :ivar str name: the description of the task (if any)
-    :ivar ~collections.abc.Coroutine coro: the coroutine object of the task
+    Encapsulates a running event loop. Every call made through this object will use the
+    same event loop.
     """
 
-    __slots__ = "_name", "id", "parent_id", "name", "coro"
+    def __enter__(self) -> TestRunner:
+        return self
 
-    def __init__(
+    @abstractmethod
+    def __exit__(
         self,
-        id: int,
-        parent_id: int | None,
-        name: str | None,
-        coro: Generator[Any, Any, Any] | Awaitable[Any],
-    ):
-        func = get_current_task
-        self._name = f"{func.__module__}.{func.__qualname__}"
-        self.id: int = id
-        self.parent_id: int | None = parent_id
-        self.name: str | None = name
-        self.coro: Generator[Any, Any, Any] | Awaitable[Any] = coro
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> bool | None: ...
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, TaskInfo):
-            return self.id == other.id
-
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self.id)
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(id={self.id!r}, name={self.name!r})"
-
-    def has_pending_cancellation(self) -> bool:
+    @abstractmethod
+    def run_asyncgen_fixture(
+        self,
+        fixture_func: Callable[..., AsyncGenerator[_T, Any]],
+        kwargs: dict[str, Any],
+    ) -> Iterable[_T]:
         """
-        Return ``True`` if the task has a cancellation pending, ``False`` otherwise.
+        Run an async generator fixture.
 
+        :param fixture_func: the fixture function
+        :param kwargs: keyword arguments to call the fixture function with
+        :return: an iterator yielding the value yielded from the async generator
         """
-        return False
 
+    @abstractmethod
+    def run_fixture(
+        self,
+        fixture_func: Callable[..., Coroutine[Any, Any, _T]],
+        kwargs: dict[str, Any],
+    ) -> _T:
+        """
+        Run an async fixture.
 
-def get_current_task() -> TaskInfo:
-    """
-    Return the current task.
+        :param fixture_func: the fixture function
+        :param kwargs: keyword arguments to call the fixture function with
+        :return: the return value of the fixture function
+        """
 
-    :return: a representation of the current task
-    :raises NoEventLoopError: if no supported asynchronous event loop is running in the
-        current thread
+    @abstractmethod
+    def run_test(
+        self, test_func: Callable[..., Coroutine[Any, Any, Any]], kwargs: dict[str, Any]
+    ) -> None:
+        """
+        Run an async test function.
 
-    """
-    return get_async_backend().get_current_task()
-
-
-def get_running_tasks() -> list[TaskInfo]:
-    """
-    Return a list of running tasks in the current event loop.
-
-    :return: a list of task info objects
-    :raises NoEventLoopError: if no supported asynchronous event loop is running in the
-        current thread
-
-    """
-    return cast("list[TaskInfo]", get_async_backend().get_running_tasks())
-
-
-async def wait_all_tasks_blocked() -> None:
-    """Wait until all other tasks are waiting for something."""
-    await get_async_backend().wait_all_tasks_blocked()
+        :param test_func: the test function
+        :param kwargs: keyword arguments to call the test function with
+        """
