@@ -1,24 +1,78 @@
-# -*- coding: utf-8 -*-
-import sys
+# Copyright (C) Dnspython Contributors, see LICENSE for text of ISC license
 
-try:
-    from ._version import version as __version__
-except ImportError:
-    __version__ = 'unknown'
+from typing import Any, Dict, List, Tuple
 
-__all__ = ['easter', 'parser', 'relativedelta', 'rrule', 'tz',
-           'utils', 'zoneinfo']
+import dns._features
+import dns.asyncbackend
 
-def __getattr__(name):
-    import importlib
+if dns._features.have("doq"):
+    from dns._asyncbackend import NullContext
+    from dns.quic._asyncio import AsyncioQuicConnection as AsyncioQuicConnection
+    from dns.quic._asyncio import AsyncioQuicManager
+    from dns.quic._asyncio import AsyncioQuicStream as AsyncioQuicStream
+    from dns.quic._common import AsyncQuicConnection  # pyright: ignore
+    from dns.quic._common import AsyncQuicManager as AsyncQuicManager
+    from dns.quic._sync import SyncQuicConnection  # pyright: ignore
+    from dns.quic._sync import SyncQuicStream  # pyright: ignore
+    from dns.quic._sync import SyncQuicManager as SyncQuicManager
 
-    if name in __all__:
-        return importlib.import_module("." + name, __name__)
-    raise AttributeError(
-        "module {!r} has not attribute {!r}".format(__name__, name)
-    )
+    have_quic = True
+
+    def null_factory(
+        *args,  # pylint: disable=unused-argument
+        **kwargs,  # pylint: disable=unused-argument
+    ):
+        return NullContext(None)
+
+    def _asyncio_manager_factory(
+        context, *args, **kwargs  # pylint: disable=unused-argument
+    ):
+        return AsyncioQuicManager(*args, **kwargs)
+
+    # We have a context factory and a manager factory as for trio we need to have
+    # a nursery.
+
+    _async_factories: Dict[str, Tuple[Any, Any]] = {
+        "asyncio": (null_factory, _asyncio_manager_factory)
+    }
+
+    if dns._features.have("trio"):
+        import trio
+
+        # pylint: disable=ungrouped-imports
+        from dns.quic._trio import TrioQuicConnection as TrioQuicConnection
+        from dns.quic._trio import TrioQuicManager
+        from dns.quic._trio import TrioQuicStream as TrioQuicStream
+
+        def _trio_context_factory():
+            return trio.open_nursery()
+
+        def _trio_manager_factory(context, *args, **kwargs):
+            return TrioQuicManager(context, *args, **kwargs)
+
+        _async_factories["trio"] = (_trio_context_factory, _trio_manager_factory)
+
+    def factories_for_backend(backend=None):
+        if backend is None:
+            backend = dns.asyncbackend.get_default_backend()
+        return _async_factories[backend.name()]
+
+else:  # pragma: no cover
+    have_quic = False
+
+    class AsyncQuicStream:  # type: ignore
+        pass
+
+    class AsyncQuicConnection:  # type: ignore
+        async def make_stream(self) -> Any:
+            raise NotImplementedError
+
+    class SyncQuicStream:  # type: ignore
+        pass
+
+    class SyncQuicConnection:  # type: ignore
+        def make_stream(self) -> Any:
+            raise NotImplementedError
 
 
-def __dir__():
-    # __dir__ should include all the lazy-importable modules as well.
-    return [x for x in globals() if x not in sys.modules] + __all__
+Headers = List[Tuple[bytes, bytes]]
